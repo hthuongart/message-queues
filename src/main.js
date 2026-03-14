@@ -1,9 +1,15 @@
 import AdvancedJobQueue from './AdvancedJobQueue.js';
+import LoggedJobQueue from './LoggedJobQueue.js';
 
 // Create a queue with concurrency 2, enable persistence to 'queue.json'
-const queue = new AdvancedJobQueue({
+// const queue = new AdvancedJobQueue({
+//   concurrency: 2,
+//   persistPath: './queue-backup.json'
+// });
+
+const queue = new LoggedJobQueue({
   concurrency: 2,
-  persistPath: './queue-backup.json'
+  logPath: './queue.log'
 });
 
 queue.on('enqueued', job => console.log(`Enqueued job ${job.id} (priority ${job.priority})`));

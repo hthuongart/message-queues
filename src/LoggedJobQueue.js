@@ -16,11 +16,11 @@ class LoggedJobQueue extends EventEmitter {
     this.checkpointInterval = options.checkpointInterval || 1000; // ops between checkpoints
     this.opsSinceCheckpoint = 0;
 
-    this._initialize();
+    this._initialize(); // now synchronous
   }
 
-  async _initialize() {
-    await this._recoverFromLog();
+  _initialize() {
+    this._recoverFromLog(); // now synchronous
     // Open log in append mode
     this.logStream = fsSync.createWriteStream(this.logPath, { flags: 'a' });
     this.emit('ready');
@@ -91,51 +91,46 @@ class LoggedJobQueue extends EventEmitter {
   }
 
   // --- Recovery: rebuild state from log ---
-  async _recoverFromLog() {
+  _recoverFromLog() {
     if (!fsSync.existsSync(this.logPath)) return;
 
-    const rl = readline.createInterface({
-      input: fsSync.createReadStream(this.logPath),
-      crlfDelay: Infinity
-    });
+    const content = fsSync.readFileSync(this.logPath, 'utf8');
+    const lines = content.split('\n').filter(line => line.trim() !== '');
+    const entries = lines.map(line => JSON.parse(line));
 
     let lastCheckpoint = null;
-    const lines = [];
-
-    for await (const line of rl) {
-      if (line.trim()) {
-        const entry = JSON.parse(line);
-        lines.push(entry);
-        if (entry.type === 'checkpoint') {
-          lastCheckpoint = entry;
-        }
+    for (const entry of entries) {
+      if (entry.type === 'checkpoint') {
+        lastCheckpoint = entry;
       }
     }
 
     // If we have a checkpoint, start from there; otherwise start empty
     if (lastCheckpoint) {
-      // Restore from checkpoint
-      this.priorityQueue = PriorityQueue.fromArray(lastCheckpoint.queue);
+      // Convert plain objects back to Job instances
+      const queueJobs = lastCheckpoint.queue.map(jobData => new Job(() => {}, jobData));
+      this.priorityQueue = PriorityQueue.fromArray(queueJobs);
       // active jobs from checkpoint are considered stale, we'll re-enqueue them as pending
-      lastCheckpoint.activeJobs.forEach(j => {
-        j.status = 'pending';
-        this.priorityQueue.enqueue(j);
+      lastCheckpoint.activeJobs.forEach(jobData => {
+        const job = new Job(() => {}, jobData);
+        job.status = 'pending';
+        this.priorityQueue.enqueue(job);
       });
       this.currentJobs = 0;
       // Now replay only entries after the checkpoint
-      const startIdx = lines.findIndex(e => e === lastCheckpoint) + 1;
-      for (let i = startIdx; i < lines.length; i++) {
-        await this._replayEntry(lines[i]);
+      const startIdx = entries.findIndex(e => e === lastCheckpoint) + 1;
+      for (let i = startIdx; i < entries.length; i++) {
+        this._replayEntry(entries[i]);
       }
     } else {
       // No checkpoint: replay all entries
-      for (const entry of lines) {
-        await this._replayEntry(entry);
+      for (const entry of entries) {
+        this._replayEntry(entry);
       }
     }
   }
 
-  async _replayEntry(entry) {
+  _replayEntry(entry) {
     switch (entry.type) {
       case 'enqueue': {
         // Recreate job object (task omitted)
