@@ -3,29 +3,36 @@ class Job {
     id = Date.now() + '-' + Math.random().toString(36).substr(2, 9),
     priority = 5,           // lower number = higher priority
     maxRetries = 0,
+    retriesLeft = maxRetries,
+    retryCount = 0,
     timeout = 0,            // 0 = no timeout
     retryDelay = 1000,        // base delay in ms
     backoffMultiplier = 2,    // multiplier for exponential backoff
     maxRetryDelay = 30000,    // cap delay at 30 seconds
     jitter = true,            // add random jitter
     createdAt = new Date(),
+    updatedAt = createdAt,
+    status = 'pending',
+    result = null,
+    error = null,
+
   } = {}) {
     this.id = id;
     this.task = task;
     this.priority = priority;
     this.maxRetries = maxRetries;
-    this.retriesLeft = maxRetries;
-    this.retryCount = 0;      // number of retries already performed
+    this.retriesLeft = retriesLeft;
+    this.retryCount = retryCount;      // number of retries already performed
     this.retryDelay = retryDelay;
     this.backoffMultiplier = backoffMultiplier;
     this.maxRetryDelay = maxRetryDelay;
     this.jitter = jitter;
     this.timeout = timeout;
     this.createdAt = createdAt;
-    this.updatedAt = createdAt;
-    this.status = 'pending';
-    this.result = null;
-    this.error = null;
+    this.updatedAt = updatedAt;
+    this.status = status;
+    this.result = result;
+    this.error = error;
   }
 
     // Mark job as started

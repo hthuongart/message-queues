@@ -3,12 +3,14 @@ import readline from 'readline';
 import fsSync from 'fs';
 import Job from './Job.js';
 import PriorityQueue from './PriorityQueue.js';
+import DelayedJobQueue from './DelayedJobQueue.js';
 
 class LoggedJobQueue extends EventEmitter {
   constructor(options = {}) {
     super();
     this.concurrency = options.concurrency || 1;
     this.priorityQueue = new PriorityQueue(); // same as before
+    this.delayedJobQueue = new DelayedJobQueue(this);
     this.activeJobs = new Map();
     this.currentJobs = 0;
     this.logPath = options.logPath || './queue.log';
@@ -49,7 +51,8 @@ class LoggedJobQueue extends EventEmitter {
         retriesLeft: job.retriesLeft,
         timeout: job.timeout,
         createdAt: job.createdAt,
-        status: job.status,
+        updatedAt: job.updatedAt,
+        status: job.status
         // task is not serializable – we assume task is recreated from a known function map in production
         // For demo, we'll omit task and rely on the user to provide idempotent task definitions.
         // In real life, you'd store task name/parameters instead.
@@ -134,7 +137,7 @@ class LoggedJobQueue extends EventEmitter {
     switch (entry.type) {
       case 'enqueue': {
         // Recreate job object (task omitted)
-        const job = new Job(() => {}, entry.job); // we pass the saved fields
+        const job = new Job(() => {console.log('Recovery')}, entry.job); // we pass the saved fields
         this.priorityQueue.enqueue(job);
         break;
       }
@@ -225,7 +228,8 @@ class LoggedJobQueue extends EventEmitter {
 
     if (willRetry) {
       job.prepareForRetry();
-      this.priorityQueue.enqueue(job);
+      const delay = job.nextRetryDelay();
+      this.delayedJobQueue.schedule(job, delay);
       this.emit('retry', job, error);
     } else {
       this.emit('failed', job, error);
@@ -234,7 +238,7 @@ class LoggedJobQueue extends EventEmitter {
   }
 
   async close() {
-    while (this.activeJobs.size > 0) {
+    while (!this.priorityQueue.isEmpty() || !this.delayedJobQueue.isEmpty()) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     // Write final checkpoint before closing

@@ -69,6 +69,15 @@ class PriorityQueue {
   toArray() {
     return this.heap.slice(); // return a copy
   }
+
+  isEmpty() {
+    const length = this.heap.length;
+    if (length) {
+      return false; 
+    }
+
+    return true;
+  }
 }
 
 export default PriorityQueue;
