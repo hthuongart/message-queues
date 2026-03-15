@@ -78,17 +78,27 @@ class AdvancedJobQueue extends EventEmitter {
     job.fail(error);
     this.activeJobs.delete(job.id);
     this.currentJobs--;
-
+  
     if (job.shouldRetry()) {
+      const delay = job.nextRetryDelay();
       job.prepareForRetry();
-      this.priorityQueue.enqueue(job);
-      this.emit('retry', job, error);
+  
+      // Schedule re-enqueue after delay
+      setTimeout(() => {
+        this.priorityQueue.enqueue(job);
+        this.emit('retry', job, error, delay);
+        this._persist();   // if using persistence
+        this._processNext();
+      }, delay);
+  
+      // Note: we don't call _processNext() immediately because the job isn't in the queue yet.
+      // However, other jobs may still be processed.
     } else {
       this.emit('failed', job, error);
+      this._persist();
+      // Still need to process next job (if any) because current job is done
+      this._processNext();
     }
-
-    this._persist();
-    this._processNext(); // continue with next job
   }
 
   // Persistence methods
