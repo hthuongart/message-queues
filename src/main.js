@@ -1,15 +1,14 @@
-import AdvancedJobQueue from './AdvancedJobQueue.js';
+import DeadLetterQueue from './DeadLetterQueue.js';
 import LoggedJobQueue from './LoggedJobQueue.js';
 
-// Create a queue with concurrency 2, enable persistence to 'queue.json'
-// const queue = new AdvancedJobQueue({
-//   concurrency: 2,
-//   persistPath: './queue-backup.json'
-// });
+// Create a dead letter queue that persists to a log file
+const dlq = new DeadLetterQueue({ logPath: './logs/deadletter.log' });
 
+// Pass it to the job queue
 const queue = new LoggedJobQueue({
   concurrency: 2,
-  logPath: './queue.log'
+  logPath: './logs/queue.log',
+  deadLetterQueue: dlq,
 });
 
 queue.on('enqueued', job => console.log(`Enqueued job ${job.id} (priority ${job.priority})`));
@@ -43,6 +42,7 @@ queue.enqueue(
 // After some time, close gracefully
 setTimeout(async () => {
   await queue.close();
-  console.log('Queue closed, state saved.');
+  await dlq.close(); // close the DLQ stream
+  console.log('Dead letters:', dlq.getAll());
   process.exit(0);
 }, 5000);

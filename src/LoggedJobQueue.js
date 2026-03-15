@@ -9,13 +9,15 @@ class LoggedJobQueue extends EventEmitter {
   constructor(options = {}) {
     super();
     this.concurrency = options.concurrency || 1;
+    this.deadLetterQueue = options.deadLetterQueue;
+    this.logPath = options.logPath;
+    this.checkpointInterval = options.checkpointInterval || 1000; // ops between checkpoints
+    
     this.priorityQueue = new PriorityQueue(); // same as before
     this.delayedJobQueue = new DelayedJobQueue(this);
     this.activeJobs = new Map();
     this.currentJobs = 0;
-    this.logPath = options.logPath || './queue.log';
     this.logStream = null;
-    this.checkpointInterval = options.checkpointInterval || 1000; // ops between checkpoints
     this.opsSinceCheckpoint = 0;
 
     this._initialize(); // now synchronous
@@ -222,16 +224,18 @@ class LoggedJobQueue extends EventEmitter {
     job.fail(error);
     this.activeJobs.delete(job.id);
     this.currentJobs--;
-
+  
     const willRetry = job.shouldRetry();
     this._logFail(job.id, error, willRetry).catch(err => this.emit('error', err));
-
+  
     if (willRetry) {
       job.prepareForRetry();
       const delay = job.nextRetryDelay();
       this.delayedJobQueue.schedule(job, delay);
       this.emit('retry', job, error);
     } else {
+      // Permanently failed → send to dead letter queue
+      this.deadLetterQueue.add(job, error).catch(err => this.emit('error', err));
       this.emit('failed', job, error);
     }
     this._processNext();
