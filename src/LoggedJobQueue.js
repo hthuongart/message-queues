@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import readline from 'readline';
 import fsSync from 'fs';
 import Job from './Job.js';
-import ScalablePriorityQueue from './ScalablePriorityQueue.js'; // changed: using ScalablePriorityQueue
+import ScalablePriorityQueue from './ScalablePriorityQueue.js';
 import DelayedJobQueue from './DelayedJobQueue.js';
 
 class LoggedJobQueue extends EventEmitter {
@@ -12,13 +12,17 @@ class LoggedJobQueue extends EventEmitter {
     this.deadLetterQueue = options.deadLetterQueue;
     this.logPath = options.logPath;
     this.checkpointInterval = options.checkpointInterval || 1000; // ops between checkpoints
-    
-    this.priorityQueue = new ScalablePriorityQueue(); // changed: now uses ScalablePriorityQueue
+    this.timeoutCheckIntervalMs = options.timeoutCheckIntervalMs || 100; // how often to check for timeouts
+
+    this.priorityQueue = new ScalablePriorityQueue();
     this.delayedJobQueue = new DelayedJobQueue(this);
     this.activeJobs = new Map();
     this.currentJobs = 0;
     this.logStream = null;
     this.opsSinceCheckpoint = 0;
+
+    // Start periodic timeout checker
+    this._timeoutCheckInterval = setInterval(() => this._checkTimeouts(), this.timeoutCheckIntervalMs);
 
     this._initialize(); // now synchronous
   }
@@ -31,7 +35,7 @@ class LoggedJobQueue extends EventEmitter {
     this._processNext();
   }
 
-  // --- Logging methods ---
+  // --- Logging methods (unchanged) ---
   _appendLog(entry) {
     return new Promise((resolve, reject) => {
       const line = JSON.stringify(entry) + '\n';
@@ -95,82 +99,81 @@ class LoggedJobQueue extends EventEmitter {
     // In a real system, you'd truncate the log before this point
   }
 
-  // --- Recovery: rebuild state from log ---
-  _recoverFromLog() {
-    if (!fsSync.existsSync(this.logPath)) return;
-
-    const content = fsSync.readFileSync(this.logPath, 'utf8');
-    const lines = content.split('\n').filter(line => line.trim() !== '');
-    const entries = lines.map(line => JSON.parse(line));
-
-    let lastCheckpoint = null;
-    for (const entry of entries) {
-      if (entry.type === 'checkpoint') {
-        lastCheckpoint = entry;
-      }
-    }
-
-    // If we have a checkpoint, start from there; otherwise start empty
-    if (lastCheckpoint) {
-      // Convert plain objects back to Job instances
-      const queueJobs = lastCheckpoint.queue.map(jobData => new Job(() => {}, jobData));
-      this.priorityQueue = ScalablePriorityQueue.fromArray(queueJobs); // changed: using static fromArray
-      // active jobs from checkpoint are considered stale, we'll re-enqueue them as pending
-      lastCheckpoint.activeJobs.forEach(jobData => {
-        const job = new Job(() => {}, jobData);
-        job.status = 'pending';
-        this.priorityQueue.enqueue(job);
-      });
-      this.currentJobs = 0;
-      // Now replay only entries after the checkpoint
-      const startIdx = entries.findIndex(e => e === lastCheckpoint) + 1;
-      for (let i = startIdx; i < entries.length; i++) {
-        this._replayEntry(entries[i]);
-      }
-    } else {
-      // No checkpoint: replay all entries
+    // --- Recovery: rebuild state from log ---
+    _recoverFromLog() {
+      if (!fsSync.existsSync(this.logPath)) return;
+  
+      const content = fsSync.readFileSync(this.logPath, 'utf8');
+      const lines = content.split('\n').filter(line => line.trim() !== '');
+      const entries = lines.map(line => JSON.parse(line));
+  
+      let lastCheckpoint = null;
       for (const entry of entries) {
-        this._replayEntry(entry);
+        if (entry.type === 'checkpoint') {
+          lastCheckpoint = entry;
+        }
+      }
+  
+      // If we have a checkpoint, start from there; otherwise start empty
+      if (lastCheckpoint) {
+        // Convert plain objects back to Job instances
+        const queueJobs = lastCheckpoint.queue.map(jobData => new Job(() => {}, jobData));
+        this.priorityQueue = ScalablePriorityQueue.fromArray(queueJobs); // changed: using static fromArray
+        // active jobs from checkpoint are considered stale, we'll re-enqueue them as pending
+        lastCheckpoint.activeJobs.forEach(jobData => {
+          const job = new Job(() => {}, jobData);
+          job.status = 'pending';
+          this.priorityQueue.enqueue(job);
+        });
+        this.currentJobs = 0;
+        // Now replay only entries after the checkpoint
+        const startIdx = entries.findIndex(e => e === lastCheckpoint) + 1;
+        for (let i = startIdx; i < entries.length; i++) {
+          this._replayEntry(entries[i]);
+        }
+      } else {
+        // No checkpoint: replay all entries
+        for (const entry of entries) {
+          this._replayEntry(entry);
+        }
       }
     }
-  }
-
-  _replayEntry(entry) {
-    switch (entry.type) {
-      case 'enqueue': {
-        // Recreate job object (task omitted)
-        const job = new Job(() => {console.log('Recovery')}, entry.job); // we pass the saved fields
-        this.priorityQueue.enqueue(job);
-        break;
+  
+    _replayEntry(entry) {
+      switch (entry.type) {
+        case 'enqueue': {
+          // Recreate job object (task omitted)
+          const job = new Job(() => {console.log('Recovery')}, entry.job); // we pass the saved fields
+          this.priorityQueue.enqueue(job);
+          break;
+        }
+        case 'dequeue': {
+          // We need to find and remove the job from the queue – but priority queue doesn't support removal by ID.
+          // In a real system you'd have a separate index. For this example, we'll assume dequeue only happens
+          // when a job starts, and we have it in activeJobs. But during recovery, we may have active jobs
+          // from before a crash. Simpler: ignore dequeue entries and rely on checkpoint + enqueue/complete/fail.
+          // Let's keep it basic: we'll just note that the job was removed.
+          // We'll not modify the queue here because we already rebuilt from checkpoint.
+          break;
+        }
+        case 'complete': {
+          // Mark job as completed (if still in queue? likely not)
+          // We could remove it from activeJobs if we track it.
+          break;
+        }
+        case 'fail': {
+          // Similar to complete
+          break;
+        }
+        case 'checkpoint':
+          // already handled
+          break;
       }
-      case 'dequeue': {
-        // We need to find and remove the job from the queue – but priority queue doesn't support removal by ID.
-        // In a real system you'd have a separate index. For this example, we'll assume dequeue only happens
-        // when a job starts, and we have it in activeJobs. But during recovery, we may have active jobs
-        // from before a crash. Simpler: ignore dequeue entries and rely on checkpoint + enqueue/complete/fail.
-        // Let's keep it basic: we'll just note that the job was removed.
-        // We'll not modify the queue here because we already rebuilt from checkpoint.
-        break;
-      }
-      case 'complete': {
-        // Mark job as completed (if still in queue? likely not)
-        // We could remove it from activeJobs if we track it.
-        break;
-      }
-      case 'fail': {
-        // Similar to complete
-        break;
-      }
-      case 'checkpoint':
-        // already handled
-        break;
     }
-  }
 
-  // --- Public API (modified to log) ---
+  // --- Public API ---
   enqueue(task, options = {}) {
     const job = new Job(task, options);
-    // Add to queue immediately
     this.priorityQueue.enqueue(job);
     this._logEnqueue(job).catch(err => this.emit('error', err));
     this.emit('enqueued', job);
@@ -179,7 +182,6 @@ class LoggedJobQueue extends EventEmitter {
   }
 
   _processNext() {
-    // same as before, but when we dequeue/complete/fail, we also log those events
     if (this.currentJobs >= this.concurrency) return;
 
     const job = this.priorityQueue.dequeue();
@@ -189,23 +191,17 @@ class LoggedJobQueue extends EventEmitter {
     this._logDequeue(job.id).catch(err => this.emit('error', err));
 
     this.currentJobs++;
-    job.start();
+    job.start(); // also sets job.startedAt
     this.activeJobs.set(job.id, job);
     this.emit('started', job);
 
-    let timeoutHandle;
-    if (job.timeout > 0) {
-      timeoutHandle = setTimeout(() => {
-        const err = new Error(`Job ${job.id} timed out after ${job.timeout}ms`);
-        this._handleJobFailure(job, err);
-      }, job.timeout);
-    }
+    // No per-job setTimeout – timeout will be checked by the central interval
 
     Promise.resolve()
       .then(() => job.task())
       .then(result => {
+        // If job hasn't already been failed by timeout or other error
         if (job.status !== 'failed') {
-          clearTimeout(timeoutHandle);
           job.complete(result);
           this.activeJobs.delete(job.id);
           this.currentJobs--;
@@ -215,15 +211,34 @@ class LoggedJobQueue extends EventEmitter {
         }
       })
       .catch(err => {
-        clearTimeout(timeoutHandle);
         this._handleJobFailure(job, err);
       });
   }
 
+  // New method: periodically check for timed-out jobs
+  _checkTimeouts() {
+    const now = Date.now();
+    for (const [id, job] of this.activeJobs) {
+      // Only check jobs that have a timeout > 0
+      if (job.timeout > 0 && job.startedAt && (now - job.startedAt) > job.timeout) {
+        const err = new Error(`Job ${job.id} timed out after ${job.timeout}ms`);
+        // Remove from activeJobs before handling to avoid double-processing
+        this.activeJobs.delete(id);
+        this.currentJobs--;
+        this._handleJobFailure(job, err);
+      }
+    }
+  }
+
   _handleJobFailure(job, error) {
     job.fail(error);
-    this.activeJobs.delete(job.id);
-    this.currentJobs--;
+    // Note: job is already removed from activeJobs in _checkTimeouts or before calling this
+    // But if called from promise catch, it's still in activeJobs, so we need to ensure removal.
+    // We'll remove it here as well to be safe.
+    if (this.activeJobs.has(job.id)) {
+      this.activeJobs.delete(job.id);
+      this.currentJobs--;
+    }
 
     const willRetry = job.shouldRetry();
     this._logFail(job.id, error, willRetry).catch(err => this.emit('error', err));
@@ -242,6 +257,9 @@ class LoggedJobQueue extends EventEmitter {
   }
 
   async close() {
+    // Stop the timeout checker
+    clearInterval(this._timeoutCheckInterval);
+
     while (!this.priorityQueue.isEmpty() || !this.delayedJobQueue.isEmpty()) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }

@@ -9,6 +9,7 @@ const queue = new LoggedJobQueue({
   concurrency: 2,
   logPath: './logs/queue.log',
   deadLetterQueue: dlq,
+  timeoutCheckIntervalMs: 200 // check every 200ms
 });
 
 queue.on('enqueued', job => console.log(`Enqueued job ${job.id} (priority ${job.priority})`));
@@ -43,6 +44,6 @@ queue.enqueue(
 setTimeout(async () => {
   await queue.close();
   await dlq.close(); // close the DLQ stream
-  console.log('Dead letters:', dlq.getAll());
+  // console.log('Dead letters:', dlq.getAll());
   process.exit(0);
 }, 5000);

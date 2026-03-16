@@ -33,12 +33,14 @@ class Job {
     this.status = status;
     this.result = result;
     this.error = error;
+    this.startedAt = null; // will be set when job starts
   }
 
     // Mark job as started
     start() {
       this.status = 'active';
       this.updatedAt = new Date();
+      this.startedAt = Date.now(); // record start time (ms)
     }
   
     // Mark as completed
