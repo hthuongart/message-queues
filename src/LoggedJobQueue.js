@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import readline from 'readline';
 import fsSync from 'fs';
 import Job from './Job.js';
-import PriorityQueue from './PriorityQueue.js';
+import ScalablePriorityQueue from './ScalablePriorityQueue.js'; // changed: using ScalablePriorityQueue
 import DelayedJobQueue from './DelayedJobQueue.js';
 
 class LoggedJobQueue extends EventEmitter {
@@ -13,7 +13,7 @@ class LoggedJobQueue extends EventEmitter {
     this.logPath = options.logPath;
     this.checkpointInterval = options.checkpointInterval || 1000; // ops between checkpoints
     
-    this.priorityQueue = new PriorityQueue(); // same as before
+    this.priorityQueue = new ScalablePriorityQueue(); // changed: now uses ScalablePriorityQueue
     this.delayedJobQueue = new DelayedJobQueue(this);
     this.activeJobs = new Map();
     this.currentJobs = 0;
@@ -114,7 +114,7 @@ class LoggedJobQueue extends EventEmitter {
     if (lastCheckpoint) {
       // Convert plain objects back to Job instances
       const queueJobs = lastCheckpoint.queue.map(jobData => new Job(() => {}, jobData));
-      this.priorityQueue = PriorityQueue.fromArray(queueJobs);
+      this.priorityQueue = ScalablePriorityQueue.fromArray(queueJobs); // changed: using static fromArray
       // active jobs from checkpoint are considered stale, we'll re-enqueue them as pending
       lastCheckpoint.activeJobs.forEach(jobData => {
         const job = new Job(() => {}, jobData);
@@ -224,10 +224,10 @@ class LoggedJobQueue extends EventEmitter {
     job.fail(error);
     this.activeJobs.delete(job.id);
     this.currentJobs--;
-  
+
     const willRetry = job.shouldRetry();
     this._logFail(job.id, error, willRetry).catch(err => this.emit('error', err));
-  
+
     if (willRetry) {
       job.prepareForRetry();
       const delay = job.nextRetryDelay();
