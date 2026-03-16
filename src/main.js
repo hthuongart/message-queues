@@ -1,11 +1,11 @@
 import DeadLetterQueue from './DeadLetterQueue.js';
-import LoggedJobQueue from './LoggedJobQueue.js';
+import AdvancedJobQueue from './AdvancedJobQueue.js';
 
 // Create a dead letter queue that persists to a log file
 const dlq = new DeadLetterQueue({ logPath: './logs/deadletter.log' });
 
 // Pass it to the job queue
-const queue = new LoggedJobQueue({
+const queue = new AdvancedJobQueue({
   concurrency: 2,
   logPath: './logs/queue.log',
   deadLetterQueue: dlq,
